@@ -1,10 +1,10 @@
 (function() {
 // CONFIGURATION
-const CHECK_INTERVAL = 1000;
-const SURPASS_DELAY = 10;
-const REVEAL_DELAY = 150;
-const BLINK_COUNT = 1;
-const GAP_THRESHOLD = 1;
+const CHECK_INTERVAL = 1000; // Check every second
+const SURPASS_DELAY = 10; // 0.01 seconds delay after surpassing
+const REVEAL_DELAY = 150; // Reduced from 300ms to 150ms for faster reveal
+const BLINK_COUNT = 1; // Each card blinks 1 time
+const GAP_THRESHOLD = 1; // Minimum difference to consider a surpass
 
 // STATE
 let isActive = false;
@@ -12,359 +12,262 @@ let surpassTimeout = null;
 let currentSurpassEvent = null;
 let previousValues = {};
 let previousRank = {};
-let loader = null;
-let loaderText = null;
-let overlay = null;
-let lastTop50Id = null;
+let updateMessage = null;
 
 // STYLES
 const style = document.createElement('style');
 style.textContent = `
-.surpass-dark-overlay {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.3); /* transparent black, no color, 0.3 opacity */
-  z-index: 10000;
-  pointer-events: none;
-  transition: opacity 0.2s;
-  user-select: none;
-  overscroll-behavior: none !important;
-}
-.loader-stack-between-cards {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10001 !important;
-  pointer-events: none;
-  user-select: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  background: none;
-  padding: 0;
-  margin: 0;
-}
-.loader-gif-img {
-  width: 54px;
-  height: 54px;
-  object-fit: contain;
-  display: block;
-  margin-bottom: 0px;
-  pointer-events: none;
-  user-select: none;
-}
-.update-message-between-cards {
-  color: white;
-  font-weight: 900;
-  font-size: 2em;
-  text-shadow: 0 0 5px rgba(0,0,0,0.6);
-  background: none;
-  border-radius: 12px;
-  padding: 0;
-  margin: 0;
-  pointer-events: none;
-  user-select: none;
-  z-index: 10001 !important;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-.update-message-between-cards .wait-main {
-  font-size: 1em;
-  font-weight: 900;
-  margin-bottom: 2px;
-}
-.update-message-between-cards .small {
-  font-size: 0.58em;
-  font-weight: 700;
-  opacity: 0.85;
-  margin-top: 0;
-  letter-spacing: 0.02em;
-}
 @keyframes card-blink {
-  0%, 100% {
-    transform: scale(1.05);
-    box-shadow: transparent;
-    background: rgb(34,33,40);
-  }
-  50% {
-    transform: scale(1);
-    box-shadow: none;
-    background: rgb(34,33,40);
-    opacity: 0.35;
-  }
+0%, 100% { 
+transform: scale(1.05);
+box-shadow: transparent;
+background: white;
+}
+50% { 
+transform: scale(1);
+box-shadow: none;
+background: white;
+opacity: 0.35;
+}
 }
 .card-updating {
-  animation: card-blink 0.3s ${BLINK_COUNT};
-  position: relative;
-  z-index: 10;
-  background: rgb(34,33,40) !important;
-  color: white !important;
-  font-weight: 900 !important;
-  transition: background 0.15s, color 0.15s;
+animation: card-blink 0.3s ${BLINK_COUNT}; // Reduced from 0.5s to 0.3s
+position: relative;
+z-index: 10;
+}
+.update-message {
+position: fixed;
+top: 40%;
+left: 50%;
+transform: translate(-50%, -50%);
+background: transparent;
+color: white;
+padding: 20px;
+border-radius: 8px;
+font-size: 22px;
+z-index: 1000;
+display: flex;
+flex-direction: column;
+align-items: center;
+justify-content: center;
+text-align: center;
+font-weight: 900;
+text-shadow: 0 0 5px rgba(0,0,0,0.5);
 }
 .card-hidden {
-  visibility: hidden;
-  opacity: 0;
-  transform: translateY(20px);
-  transition: all 0.2s ease-out;
+visibility: hidden;
+opacity: 0;
+transform: translateY(20px);
+transition: all 0.2s ease-out; // Reduced from 0.3s
 }
 .pending-surpass {
-  border-left: 4px solid gold;
+border-left: 4px solid gold;
+}
+.vertical-line-loader {
+display: flex;
+gap: 10px;
+margin-bottom: 15px;
+}
+.loader-line {
+width: 5px;
+height: 25px;
+background: white;
+animation: line-bounce 1.2s ease-in-out infinite;
+}
+.loader-line:nth-child(1) {
+animation-delay: 0s;
+}
+.loader-line:nth-child(2) {
+animation-delay: 0.2s;
+}
+.loader-line:nth-child(3) {
+animation-delay: 0.4s;
+}
+@keyframes line-bounce {
+0%, 100% {
+transform: translateY(0);
+}
+50% {
+transform: translateY(-10px);
+}
+}
+.loading-text {
+font-weight: 900;
+text-align: center;
+width: 100%;
+font-size: 1.2em;
+letter-spacing: 1px;
 }
 `;
 document.head.appendChild(style);
 
 // GET CURRENT NUMERIC VALUE
 function getCardValue(card) {
-  const numText = card.querySelector('.num_text');
-  if (!numText) return 0;
-  return parseInt(numText.textContent) || 0;
+const numText = card.querySelector('.num_text');
+if (!numText) return 0;
+return parseInt(numText.textContent) || 0;
 }
 
-// CHECK FOR SURPASSING OR TOP 50 CHANGE
-function checkForSurpassingOrTop50() {
-  if (isActive) return false;
+// CHECK FOR SURPASSING
+function checkForSurpassing() {
+if (isActive) return false;
 
-  const cards = Array.from(document.querySelectorAll('.card'));
-  const currentValues = {};
-  let hasChange = false;
+const cards = Array.from(document.querySelectorAll('.card'));
+const currentValues = {};
+let hasChange = false;
 
-  // Get current values and check for changes
-  cards.forEach(card => {
-    const id = card.id;
-    currentValues[id] = getCardValue(card);
+// Get current values and check for changes
+cards.forEach(card => {
+const id = card.id;
+currentValues[id] = getCardValue(card);
 
-    if (previousValues[id] !== currentValues[id]) {
-      hasChange = true;
-    }
-  });
+if (previousValues[id] !== currentValues[id]) {
+hasChange = true;
+}
+});
 
-  // First run - initialize tracking
-  if (Object.keys(previousValues).length === 0) {
-    previousValues = currentValues;
-    cards.forEach((card, index) => {
-      previousRank[card.id] = index;
-    });
-
-    // Track initial top 50 card
-    if (cards.length >= 50) {
-      lastTop50Id = cards[49] && cards[49].id;
-    }
-    return false;
-  }
-
-  // Only proceed if values changed
-  if (!hasChange) return false;
-
-  // Get current ranking
-  const currentRanking = cards
-    .map(card => ({
-      id: card.id,
-      value: currentValues[card.id],
-      element: card
-    }))
-    .sort((a, b) => b.value - a.value);
-
-  // Check for position changes
-  let surpassEvent = null;
-  currentRanking.forEach((card, newIndex) => {
-    const oldIndex = previousRank[card.id];
-    if (oldIndex > newIndex &&
-      (currentValues[card.id] - currentValues[currentRanking[newIndex + 1]?.id] >= GAP_THRESHOLD)) {
-      surpassEvent = {
-        cards: cards,
-        timestamp: Date.now()
-      };
-    }
-  });
-
-  // Check for top 50 change
-  let top50Changed = false;
-  if (cards.length >= 50) {
-    const top50Card = currentRanking[49];
-    if (top50Card && top50Card.id !== lastTop50Id) {
-      top50Changed = true;
-      lastTop50Id = top50Card.id;
-    }
-  }
-
-  // Update previous state
-  previousValues = currentValues;
-  currentRanking.forEach((card, index) => {
-    previousRank[card.id] = index;
-  });
-
-  // Trigger on either surpass or top 50 change
-  if (surpassEvent) return surpassEvent;
-  if (top50Changed) return { cards: cards, timestamp: Date.now(), top50: true };
-  return false;
+// First run - initialize tracking
+if (Object.keys(previousValues).length === 0) {
+previousValues = currentValues;
+cards.forEach((card, index) => {
+previousRank[card.id] = index;
+});
+return false;
 }
 
-// POSITION BETWEEN CARDS
-function positionBetweenCards() {
-  const cards = document.querySelectorAll('.card');
-  if (cards.length < 27) return;
+// Only proceed if values changed
+if (!hasChange) return false;
 
-  // Loader+text stack: centered between 25th and 26th card (index 24 and 25 for loader, 25 and 26 for text)
-  const card24 = cards[23];
-  const card25 = cards[24];
-  const card26 = cards[25];
+// Get current ranking
+const currentRanking = cards
+.map(card => ({
+id: card.id,
+value: currentValues[card.id],
+element: card
+}))
+.sort((a, b) => b.value - a.value);
 
-  // Get bounding rects
-  const rect24 = card24.getBoundingClientRect();
-  const rect25 = card25.getBoundingClientRect();
-  const rect26 = card26.getBoundingClientRect();
+// Check for position changes
+let surpassEvent = null;
+currentRanking.forEach((card, newIndex) => {
+const oldIndex = previousRank[card.id];
+if (oldIndex > newIndex && 
+(currentValues[card.id] - currentValues[currentRanking[newIndex + 1]?.id] >= GAP_THRESHOLD)) {
+surpassEvent = {
+cards: cards,
+timestamp: Date.now()
+};
+}
+});
 
-  // Vertical position: stack is between card25 and card26 (so: (card25.bottom + card26.top)/2)
-  const stackTop = (rect25.bottom + rect26.top) / 2 + window.scrollY;
+// Update previous state
+previousValues = currentValues;
+currentRanking.forEach((card, index) => {
+previousRank[card.id] = index;
+});
 
-  if (loader && loader.parentElement) {
-    loader.parentElement.style.top = `${stackTop - 34}px`; // a bit above
-  }
+return surpassEvent;
 }
 
 // ANIMATION SEQUENCE
 function executeUpdate(cards) {
-  isActive = true;
+isActive = true;
 
-  // Add dark overlay if not present
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.className = 'surpass-dark-overlay';
-    overlay.style.opacity = '1';
-    document.body.appendChild(overlay);
-  } else {
-    overlay.style.opacity = '1';
-    overlay.style.display = '';
-  }
-  overlay.style.zIndex = 10000;
+// Show update message with new loader style
+if (updateMessage) {
+updateMessage.remove();
+}
+updateMessage = document.createElement('div');
+updateMessage.className = 'update-message';
 
-  // Remove previous loader stack if any
-  if (loader && loader.parentElement) loader.parentElement.remove();
-  loader = null;
+// Create vertical line loader (l l l)
+const loader = document.createElement('div');
+loader.className = 'vertical-line-loader';
 
-  // Make a flex column stack for loader and text
-  const loaderStack = document.createElement('div');
-  loaderStack.className = 'loader-stack-between-cards';
-  loaderStack.style.zIndex = 10001;
+for (let i = 0; i < 3; i++) {
+const line = document.createElement('div');
+line.className = 'loader-line';
+loader.appendChild(line);
+}
 
-  // Loader (custom gif)
-  loader = document.createElement('img');
-  loader.className = 'loader-gif-img';
-  loader.src = 'https://i.imgur.com/btGcXS4.gif';
-  loader.alt = 'Loading...';
-  loader.style.opacity = '1';
-  loader.style.zIndex = 10001;
-  loader.style.pointerEvents = 'none';
-  loader.style.userSelect = 'none';
+// Create static text (no animation)
+const text = document.createElement('div');
+text.className = 'loading-text';
+text.textContent = 'Please Wait We Are Checking For Information';
 
-  // Loader text (Please wait... on top, then small)
-  loaderText = document.createElement('div');
-  loaderText.className = 'update-message-between-cards';
-  loaderText.style.opacity = '1';
-  loaderText.style.zIndex = 10001;
-  loaderText.style.pointerEvents = 'none';
-  loaderText.style.userSelect = 'none';
-  loaderText.innerHTML = `
-    <span class="wait-main">Please wait...</span>
-    <span class="small">We are checking for changed information.</span>
-  `;
+updateMessage.appendChild(loader);
+updateMessage.appendChild(text);
+document.body.appendChild(updateMessage);
 
-  loaderStack.appendChild(loader);
-  loaderStack.appendChild(loaderText);
-  document.body.appendChild(loaderStack);
+// Hide all cards
+cards.forEach(card => {
+card.classList.add('card-hidden');
+});
 
-  // Position loader stack
-  positionBetweenCards();
-  window.addEventListener('resize', positionBetweenCards);
-  window.addEventListener('scroll', positionBetweenCards);
+// Animation sequence
+setTimeout(() => {
+// Reveal cards one by one in their original order
+cards.forEach((card, index) => {
+setTimeout(() => {
+card.classList.remove('card-hidden');
+card.classList.add('card-updating');
 
-  // Hide all cards
-  cards.forEach(card => {
-    card.classList.add('card-hidden');
-  });
+// Remove animation class after it completes
+setTimeout(() => {
+card.classList.remove('card-updating');
 
-  // Prevent double refresh: clear any old timeouts
-  if (surpassTimeout) {
-    clearTimeout(surpassTimeout);
-    surpassTimeout = null;
-  }
-
-  // Animation sequence
-  setTimeout(() => {
-    // Reveal cards one by one in their original order
-    cards.forEach((card, index) => {
-      setTimeout(() => {
-        card.classList.remove('card-hidden');
-        card.classList.add('card-updating');
-
-        // Remove animation class after it completes
-        setTimeout(() => {
-          card.classList.remove('card-updating');
-          // Remove message and reset state after last card
-          if (index === cards.length - 1) {
-            setTimeout(() => {
-              if (loaderStack) loaderStack.remove();
-              loader = null;
-              loaderText = null;
-              if (overlay) {
-                overlay.style.opacity = '0';
-                overlay.style.display = 'none';
-              }
-              window.removeEventListener('resize', positionBetweenCards);
-              window.removeEventListener('scroll', positionBetweenCards);
-              isActive = false;
-            }, 300);
-          }
-        }, BLINK_COUNT * 300);
-      }, index * REVEAL_DELAY);
-    });
-  }, 300);
+// Remove message and reset state after last card
+if (index === cards.length - 1) {
+setTimeout(() => { 
+if (updateMessage) {
+updateMessage.remove();
+updateMessage = null;
+}
+isActive = false; 
+}, 300); // Reduced from 500ms
+}
+}, BLINK_COUNT * 300); // Reduced from 500ms
+}, index * REVEAL_DELAY);
+});
+}, 300); // Reduced from 500ms
 }
 
 // MONITORING SYSTEM
 function startMonitoring() {
-  let lastSurpassTimestamp = 0;
-  setInterval(() => {
-    if (isActive) return;
+setInterval(() => {
+if (isActive) return;
 
-    const newSurpassEvent = checkForSurpassingOrTop50();
+const newSurpassEvent = checkForSurpassing();
 
-    // Prevent triggering twice in a row for same event
-    if (newSurpassEvent && (!lastSurpassTimestamp || (Date.now() - lastSurpassTimestamp > 1000))) {
-      lastSurpassTimestamp = Date.now();
+if (newSurpassEvent) {
+// Clear any pending timeout
+if (surpassTimeout) {
+clearTimeout(surpassTimeout);
+}
 
-      // Clear any pending timeout
-      if (surpassTimeout) {
-        clearTimeout(surpassTimeout);
-        surpassTimeout = null;
-      }
+// Store the new event
+currentSurpassEvent = newSurpassEvent;
 
-      // Store the new event
-      currentSurpassEvent = newSurpassEvent;
+// Mark cards as pending
+currentSurpassEvent.cards.forEach(card => {
+card.classList.add('pending-surpass');
+});
 
-      // Mark cards as pending
-      currentSurpassEvent.cards.forEach(card => {
-        card.classList.add('pending-surpass');
-      });
-
-      // Set timeout for the actual animation
-      surpassTimeout = setTimeout(() => {
-        if (currentSurpassEvent) {
-          currentSurpassEvent.cards.forEach(card => {
-            card.classList.remove('pending-surpass');
-          });
-          executeUpdate(currentSurpassEvent.cards);
-          currentSurpassEvent = null;
-        }
-      }, SURPASS_DELAY);
-    }
-  }, CHECK_INTERVAL);
+// Set timeout for the actual animation
+surpassTimeout = setTimeout(() => {
+if (currentSurpassEvent) {
+currentSurpassEvent.cards.forEach(card => {
+card.classList.remove('pending-surpass');
+});
+executeUpdate(currentSurpassEvent.cards);
+currentSurpassEvent = null;
+}
+}, SURPASS_DELAY);
+}
+}, CHECK_INTERVAL);
 }
 
 // INITIALIZE
-console.log('hi there');
+console.log('Delayed Surpass Monitor Activated - With Faster White Blink Background');
 startMonitoring();
 })();
