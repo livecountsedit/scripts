@@ -1,0 +1,813 @@
+(function () {
+    // ==================================================================
+    // CONFIG
+    // ==================================================================
+    const CONFIG = {
+        UPDATE_INTERVAL_FAST_MS: 5900,
+        UPDATE_INTERVAL_SLOW_MS: 29500,
+        TOP_GAINERS_LIMIT: 10,
+        DISPLAY_GROUP_A_MS: 16000,
+        DISPLAY_GROUP_B_MS: 15000,
+        TRANSITION_MS: 2000,
+        ODOMETER_FONT_SIZE_PX: 14,
+        ODOMETER_DIGIT_HEIGHT_PX: 20,
+        FLASH_UP_COLOR: '#309867',
+        FLASH_DOWN_COLOR: '#9b2f3f',
+        FLASH_BG_COLOR: '#8F00FF',
+        FLASH_BG_DURATION: 500,
+        FLASH_TEXT_DURATION: 1000,
+        BATTLE_THRESHOLD_MINUTES: 60,
+    };
+
+    // ==================================================================
+    // STATE
+    // ==================================================================
+    const state = {
+        previousGainCounts: new Map(),
+        top10Container: null,
+        top10List: null,
+        currentGroup: 'A',
+        intervals: [],
+        top10CurrentCounts: new Map(),
+        flashingCards: new Set(),
+        transitionTimeout: null,
+        currentTop10: [],
+        allChannels: [],
+        battleMode: false,
+        battlePair: null,
+        timerInterval: null,
+        currentCountdownSeconds: 0,
+    };
+
+    // ==================================================================
+    // SAFE UTILITIES
+    // ==================================================================
+    const safeParseInt = (val, fallback = 0) => {
+        if (val == null || val === '') return fallback;
+        const parsed = parseInt(val, 10);
+        return Number.isNaN(parsed) ? fallback : parsed;
+    };
+
+    const formatNumberWithCommas = n => {
+        return (n ?? 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    };
+
+    const getFireIcon = (gain) => {
+        gain = safeParseInt(gain, 0);
+
+        if (gain >= 100000) return 'https://media1.giphy.com/media/J49iia6yOc1OMbx0PS/giphy.gif';
+        if (gain >= 70000)  return 'https://media1.giphy.com/media/FZ1vZtT6v4QPOUxVyf/giphy.gif';
+        if (gain >= 50000)  return 'https://media0.giphy.com/media/1xfojD0iKc7aEcLKFe/giphy.gif';
+        if (gain >= 35000)  return 'https://media0.giphy.com/media/kFBgDf0tA4HwuC3mDM/giphy.gif';
+        if (gain >= 20000)  return 'https://media4.giphy.com/media/TZ4T3v6RadxDcwZvaQ/giphy.gif';
+        if (gain >= 10000)  return 'https://media4.giphy.com/media/gKTCMo79cZMvcxR4YZ/giphy.gif';
+        if (gain >= 5000)   return 'https://media2.giphy.com/media/32NsR7devV4eplJRo6/giphy.gif';
+        if (gain >= 3500)   return 'https://media2.giphy.com/media/TggCqYM9oW2aMP0qd1/giphy.gif';
+        if (gain >= 2000)   return 'https://media1.giphy.com/media/4xNl0av01ubtRT4UZa/giphy.gif';
+        if (gain >= 1500)   return 'https://i.ibb.co/v6RPxWQt/Full-Bar.png';
+        if (gain >= 1000)   return 'https://i.ibb.co/gZDySDjc/Half-Bar.png';
+        if (gain >= 100)    return null;
+        if (gain >= 0)      return 'https://i.ibb.co/vSzYhQ8/IMG-9552.jpg';
+
+        return 'https://media2.giphy.com/media/Zge31oiMe2VTrWeou8/giphy.gif';
+    };
+
+    // ==================================================================
+    // STYLES
+    // ==================================================================
+    function initStyles() {
+        if (document.getElementById('top10-styles')) return;
+
+        const style = document.createElement('style');
+        style.id = 'top10-styles';
+        style.textContent = `
+            #top10-container {
+                position: fixed;
+                top: 50vw;
+                left: 50%;
+                transform: translateX(-50%);
+                padding: 18px;
+                border-radius: 12px;
+                z-index: 1000;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 12px;
+                max-width: 98vw;
+                width: auto;
+                box-sizing: border-box;
+                overflow: hidden;
+            }
+            #top10-title {
+                font-weight: bold;
+                color: #fff;
+                font-size: 18px;
+                margin-bottom: 8px;
+            }
+            #top10-list {
+                display: flex;
+                gap: 0;                    /* ← no gap between cards */
+                justify-content: center;
+                flex-wrap: nowrap;
+                padding: 10px 0;
+                opacity: 1;
+                filter: blur(0);
+                transition: opacity ${CONFIG.TRANSITION_MS}ms, filter ${CONFIG.TRANSITION_MS}ms;
+                box-sizing: border-box;
+                width: 100%;
+                overflow: hidden;
+            }
+            .top10-card {
+                background: #2d0a5c;
+                padding: 0px;
+                border-radius: 0;          /* ← no border radius on card */
+                display: flex;
+                align-items: center;
+                gap: 5;                    /* ← no gap between fire and avatar */
+                overflow: hidden;
+                flex: 1 1 0;
+                min-width: 0;
+                box-shadow: 0 2px 10px rgba(0,0,0,.4);
+                max-width: 220px;
+            }
+            @media (min-width: 1200px) {
+                #top10-list { gap: 0; }
+                .top10-card { max-width: 240px; }
+            }
+            @media (max-width: 1199px) { .top10-card { min-width: 165px; } }
+            @media (max-width: 900px)  { .top10-card { min-width: 150px; } }
+            @media (max-width: 700px)  { .top10-card { min-width: 130px; padding: 10px; gap: 0; } }
+
+            .battle-card {
+                background: #3a0c6e;
+                padding: 18px 24px;
+                border-radius: 16px;
+                display: flex;
+                align-items: center;
+                gap: 20px;
+                overflow: hidden;
+                box-shadow: 0 4px 25px rgba(143,0,255,.5);
+                border: 3px solid #8F00FF;
+                justify-content: space-between;
+                flex-wrap: nowrap;
+                width: 100%;
+                max-width: 95vw;
+            }
+            .battle-side {
+                flex: 1;
+                display: flex;
+                align-items: center;
+                gap: 14px;
+                min-width: 0;
+            }
+            .battle-side.right { flex-direction: row-reverse; }
+            .battle-fire-wrapper,
+            .battle-avatar-wrapper {
+                position: relative;
+                width: 50px;
+                height: 50px;
+                flex-shrink: 0;
+                overflow: hidden;
+                border-radius: 10;          /* sharp corners also in battle mode */
+            }
+            .battle-avatar,
+            .battle-fire {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                object-position: center;
+                border-radius: 50px;          /* ← no rounded corners on images */
+            }
+            .battle-avatar {
+                border: 2px solid white;
+                box-shadow: 0 0 8px rgba(255,255,255,.4);
+            }
+            .battle-rank-text {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%,-50%);
+                color: #fff;
+                font-weight: bold;
+                font-size: 14px;
+                z-index: 1;
+                text-shadow: 0 0 7px #000;
+                pointer-events: none;
+            }
+            .battle-info {
+                flex: 1;
+                min-width: 0;
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+                overflow: hidden;
+                text-align: left;
+            }
+            .battle-side.right .battle-info { text-align: right; }
+            .battle-name {
+                font-weight: bold;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                color: #e0e0e0;
+                font-size: 13px;
+            }
+            .top5-count-display {
+                font-size: ${CONFIG.ODOMETER_FONT_SIZE_PX}px;
+                height: ${CONFIG.ODOMETER_DIGIT_HEIGHT_PX}px;
+                line-height: ${CONFIG.ODOMETER_DIGIT_HEIGHT_PX}px;
+                overflow: hidden;
+                letter-spacing: -0.05em;
+                color: white;
+                font-family: monospace;
+                font-weight: bold;
+                transition: color .3s;
+                min-width: 90px;
+            }
+            .battle-card .top5-count-display {
+                font-size: 18px !important;
+                height: 28px !important;
+                line-height: 28px !important;
+                min-width: 110px !important;
+            }
+            .battle-difference .top5-count-display {
+                font-size: 20px !important;
+                height: 36px !important;
+                line-height: 36px !important;
+                min-width: 120px !important;
+            }
+            .sub-gap-label {
+                position: absolute;
+                top: -26px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: #fff;
+                color: #8F00FF;
+                font-weight: bold;
+                font-size: 12px;
+                padding: 1px 12px;
+                border-radius: 20px;
+                white-space: nowrap;
+                box-shadow: 0 2px 8px rgba(0,0,0,.4);
+                z-index: 2;
+            }
+            .battle-difference {
+                margin-top: 40px;
+                position: relative;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 100px;
+                flex-shrink: 0;
+            }
+            .battle-timer {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                font-family: monospace;
+                color: #ffaa00;
+                font-weight: bold;
+                flex-shrink: 0;
+                min-width: 200px;
+            }
+            .timer-labels {
+                display: flex;
+                gap: 8px;
+                font-size: 10px;
+                letter-spacing: 1px;
+                margin-bottom: 6px;
+            }
+            .timer-labels span {
+                width: 44px;
+                text-align: center;
+                background: rgba(255,170,0,.2);
+                padding: 4px 0;
+                border-radius: 6px;
+            }
+            .timer-values {
+                display: flex;
+                gap: 8px;
+                font-size: 22px;
+            }
+            .timer-values span {
+                width: 44px;
+                text-align: center;
+                background: #000;
+                padding: 8px 0;
+                border: 2px solid #ffaa00;
+                border-radius: 10px;
+            }
+            #top10-container .odometer-digit {
+                display: inline-block;
+                width: .6em;
+                height: ${CONFIG.ODOMETER_DIGIT_HEIGHT_PX}px;
+                line-height: ${CONFIG.ODOMETER_DIGIT_HEIGHT_PX}px;
+                overflow: hidden;
+                position: relative;
+                text-align: center;
+            }
+            #top10-container .odometer-digit-container {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                transition: transform .6s cubic-bezier(.22,.61,.36,1);
+            }
+            #top10-container .odometer-digit-container span {
+                display: block;
+                height: ${CONFIG.ODOMETER_DIGIT_HEIGHT_PX}px;
+            }
+            .flash-up { color: ${CONFIG.FLASH_UP_COLOR} !important; }
+            .flash-down { color: ${CONFIG.FLASH_DOWN_COLOR} !important; }
+            .flash-bg { animation: flashBg ${CONFIG.FLASH_BG_DURATION}ms ease-out; }
+            @keyframes flashBg {
+                0% { background-color: ${CONFIG.FLASH_BG_COLOR}; }
+                100% { background: transparent; }
+            }
+            .fade-out {
+                opacity: 0;
+                filter: blur(12px) !important;
+            }
+            .fade-in {
+                opacity: 1;
+                filter: blur(0);
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // ==================================================================
+    // ODOMETER ANIMATION
+    // ==================================================================
+    function formatAndAnimateCount(el, newCount, id, cardElement) {
+        if (!el || !id) return;
+
+        newCount = safeParseInt(newCount, 0);
+        const oldCount = state.top10CurrentCounts.get(id) ?? 0;
+        const isUp = newCount > oldCount;
+        const isDown = newCount < oldCount;
+
+        state.top10CurrentCounts.set(id, newCount);
+
+        const str = formatNumberWithCommas(newCount);
+        const digits = str.split('').filter(c => c !== ',');
+
+        if (el.children.length === 0) {
+            str.split('').forEach(ch => {
+                if (ch === ',') {
+                    const sep = document.createElement('span');
+                    sep.textContent = ',';
+                    el.appendChild(sep);
+                } else {
+                    const digit = document.createElement('span');
+                    digit.className = 'odometer-digit';
+                    const container = document.createElement('div');
+                    container.className = 'odometer-digit-container';
+                    for (let i = 0; i <= 9; i++) {
+                        const span = document.createElement('span');
+                        span.textContent = i;
+                        container.appendChild(span);
+                    }
+                    digit.appendChild(container);
+                    el.appendChild(digit);
+                }
+            });
+        }
+
+        const digitEls = el.querySelectorAll('.odometer-digit');
+        const h = el.classList.contains('battle-difference')
+            ? 36
+            : CONFIG.ODOMETER_DIGIT_HEIGHT_PX;
+
+        let idx = 0;
+        digitEls.forEach(d => {
+            const container = d.querySelector('.odometer-digit-container');
+            if (!container || idx >= digits.length) return;
+            const target = safeParseInt(digits[idx++], 0);
+            container.style.transform = `translateY(${-target * h}px)`;
+        });
+
+        if (!el.closest('.battle-difference') && (isUp || isDown)) {
+            el.classList.remove('flash-up', 'flash-down');
+            void el.offsetWidth;
+            el.classList.add(isUp ? 'flash-up' : 'flash-down');
+            setTimeout(() => el.classList.remove('flash-up', 'flash-down'), CONFIG.FLASH_TEXT_DURATION);
+        }
+
+        if ((isUp || isDown) && cardElement && !state.flashingCards.has(cardElement) && !cardElement.classList.contains('battle-card')) {
+            state.flashingCards.add(cardElement);
+            cardElement.classList.add('flash-bg');
+            setTimeout(() => {
+                cardElement.classList.remove('flash-bg');
+                state.flashingCards.delete(cardElement);
+            }, CONFIG.FLASH_BG_DURATION);
+        }
+    }
+
+    // ==================================================================
+    // TIMER
+    // ==================================================================
+    function startCountdownTimer() {
+        if (state.timerInterval) clearInterval(state.timerInterval);
+
+        state.timerInterval = setInterval(() => {
+            if (state.currentCountdownSeconds <= 0) {
+                updateTimerDisplay(0);
+                clearInterval(state.timerInterval);
+                state.timerInterval = null;
+                return;
+            }
+            state.currentCountdownSeconds--;
+            updateTimerDisplay(state.currentCountdownSeconds);
+        }, 1000);
+    }
+
+    function updateTimerDisplay(totalSeconds) {
+        totalSeconds = Math.max(0, safeParseInt(totalSeconds));
+
+        const d = Math.floor(totalSeconds / 86400);
+        const h = Math.floor((totalSeconds % 86400) / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+
+        const container = document.querySelector('.battle-timer');
+        if (!container) return;
+
+        container.innerHTML = `
+            <div class="timer-labels">
+                <span>DAY</span><span>HOUR</span><span>MIN</span><span>SEC</span>
+            </div>
+            <div class="timer-values">
+                <span>${d.toString().padStart(2,'0')}</span>
+                <span>${h.toString().padStart(2,'0')}</span>
+                <span>${m.toString().padStart(2,'0')}</span>
+                <span>${s.toString().padStart(2,'0')}</span>
+            </div>
+        `;
+    }
+
+    // ==================================================================
+    // CONTAINER & RENDER FUNCTIONS
+    // ==================================================================
+    function createTop10Container() {
+        const old = document.getElementById('top10-container');
+        if (old) old.remove();
+
+        const c = document.createElement('div');
+        c.id = 'top10-container';
+        c.innerHTML = `
+            <div id="top10-title">TOP 10 FASTEST GROWING CHANNELS</div>
+            <div id="top10-list"></div>
+        `;
+        document.body.appendChild(c);
+
+        state.top10Container = c;
+        state.top10List = c.querySelector('#top10-list');
+
+        initStyles();
+        return c;
+    }
+
+    function renderGroup(gainers, start, end) {
+        if (!state.top10List) createTop10Container();
+        if (!state.top10List || !Array.isArray(gainers)) return;
+
+        const list = state.top10List;
+        const title = state.top10Container?.querySelector('#top10-title');
+        if (title) title.textContent = 'TOP 10 FASTEST GROWING CHANNELS';
+
+        list.classList.remove('fade-in');
+        list.classList.add('fade-out');
+
+        setTimeout(() => {
+            list.innerHTML = '';
+
+            gainers.slice(start, end).forEach(g => {
+                if (!g?.id) return;
+
+                const main = document.getElementById(g.id);
+                const rank = main?.querySelector('.num_text')?.textContent?.trim() || g.rank || '?';
+
+                const card = document.createElement('div');
+                card.className = 'top10-card';
+
+                const rankBox = document.createElement('div');
+                rankBox.style.cssText = 'position:relative;width:40px;height:45px;flex-shrink:0;';
+
+                const fire = getFireIcon(g.gain);
+                let rankColor = '#fff';
+                if (fire?.includes('Full-Bar.png')) rankColor = '#c26700';
+                else if (fire?.includes('Half-Bar.png')) rankColor = '#82531D';
+
+                if (fire) {
+                    const img = document.createElement('img');
+                    img.src = fire;
+                    img.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:center;border-radius:0;';
+                    img.onerror = () => (img.style.display = 'none');
+                    rankBox.appendChild(img);
+
+                    const txt = document.createElement('div');
+                    txt.textContent = rank;
+                    txt.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:${rankColor};font-weight:bold;font-size:13px;z-index:1;text-shadow:0 0 4px #000;`;
+                    rankBox.appendChild(txt);
+                } else {
+                    rankBox.textContent = rank;
+                    rankBox.style.cssText += `font-weight:bold;font-size:16px;color:${rankColor};display:flex;align-items:center;justify-content:center;`;
+                }
+                card.appendChild(rankBox);
+
+                const avatar = document.createElement('img');
+                avatar.src = main?.querySelector('img')?.src || 'https://lcedit.com/default.png';
+                avatar.style.cssText = 'width:45px;height:45px;object-fit:cover;object-position:center;border-radius:0;flex-shrink:0;';
+                avatar.onerror = () => (avatar.src = 'https://lcedit.com/default.png');
+                card.appendChild(avatar);
+
+                const info = document.createElement('div');
+                info.style.cssText = 'flex:1;min-width:0;margin-left:60px;';
+
+                const name = document.createElement('div');
+                name.textContent = (g.name || 'UNKNOWN').toUpperCase();
+                name.style.cssText = 'font-weight:bold;white-space:nowrap;text-overflow:ellipsis;color:#e0e0e0;font-size:9px;margin-left:-50px;';
+                info.appendChild(name);
+
+                const countBox = document.createElement('div');
+                countBox.className = 'top5-count-display';
+                countBox.dataset.channelId = g.id;
+                info.appendChild(countBox);
+
+                card.appendChild(info);
+                list.appendChild(card);
+
+                state.top10CurrentCounts.set(g.id, safeParseInt(g.count, 0));
+                formatAndAnimateCount(countBox, g.count, g.id, card);
+            });
+
+            list.classList.remove('fade-out');
+            list.classList.add('fade-in');
+        }, CONFIG.TRANSITION_MS);
+    }
+
+    function renderBattle(battle) {
+        if (!battle?.higher || !battle?.lower) return;
+        if (!state.top10List) createTop10Container();
+        if (!state.top10List) return;
+
+        const list = state.top10List;
+        const title = state.top10Container?.querySelector('#top10-title');
+        if (title) title.textContent = `BATTLE: ${battle.higher.name} vs ${battle.lower.name}`;
+
+        list.style.transition = 'none';
+        list.classList.remove('fade-out', 'fade-in');
+        list.style.opacity = '1';
+        list.style.filter = 'blur(0)';
+        list.innerHTML = '';
+
+        const card = document.createElement('div');
+        card.className = 'battle-card';
+
+        const main1 = document.getElementById(battle.higher.id);
+        const main2 = document.getElementById(battle.lower.id);
+        const fire1 = getFireIcon(battle.higher.gain);
+        const fire2 = getFireIcon(battle.lower.gain);
+        const rankColor1 = fire1?.includes('Full-Bar') ? '#c26700' : fire1?.includes('Half-Bar') ? '#82531D' : '#fff';
+        const rankColor2 = fire2?.includes('Full-Bar') ? '#c26700' : fire2?.includes('Half-Bar') ? '#82531D' : '#fff';
+
+        card.innerHTML = `
+            <div class="battle-side">
+                <div class="battle-fire-wrapper">
+                    ${fire1 ? `<img class="battle-fire" src="${fire1}" onerror="this.style.display='none'"/>` : ''}
+                    <div class="battle-rank-text" style="color:${rankColor1};"># ${battle.higher.rank}</div>
+                </div>
+                <div class="battle-avatar-wrapper">
+                    <img class="battle-avatar" src="${escapeHTML(main1?.querySelector('img')?.src || 'https://lcedit.com/default.png')}" onerror="this.src='https://lcedit.com/default.png"/>
+                </div>
+                <div class="battle-info">
+                    <div class="battle-name">${battle.higher.name}</div>
+                    <div class="top5-count-display" data-channel-id="${battle.higher.id}"></div>
+                </div>
+            </div>
+
+            <div class="battle-difference">
+                <div class="sub-gap-label">Sub-Gap</div>
+                <div class="top5-count-display" data-channel-id="battle-gap" style="text-align: center"></div>
+            </div>
+
+            <div class="battle-side right">
+                <div class="battle-fire-wrapper">
+                    ${fire2 ? `<img class="battle-fire" src="${fire2}" onerror="this.style.display='none'"/>` : ''}
+                    <div class="battle-rank-text" style="color:${rankColor2};"># ${battle.lower.rank}</div>
+                </div>
+                <div class="battle-avatar-wrapper">
+                    <img class="battle-avatar" src="${escapeHTML(main2?.querySelector('img')?.src || 'https://lcedit.com/default.png')}" onerror="this.src='https://lcedit.com/default.png'"/>
+                </div>
+                <div class="battle-info">
+                    <div class="battle-name">${battle.lower.name}</div>
+                    <div class="top5-count-display" data-channel-id="${battle.lower.id}"></div>
+                </div>
+            </div>
+
+            <div class="battle-timer">
+                <div class="timer-labels"><span>DAY</span><span>HOUR</span><span>MIN</span><span>SEC</span></div>
+                <div class="timer-values"><span>00</span><span>00</span><span>00</span><span>00</span></div>
+            </div>
+        `;
+
+        list.appendChild(card);
+
+        const gap = Math.max(0, safeParseInt(battle.higher.count) - safeParseInt(battle.lower.count));
+        const relativeSpeed = safeParseInt(battle.lower.gain) - safeParseInt(battle.higher.gain);
+        const minutesLeft = (relativeSpeed > 0 && gap > 0) ? Math.floor((gap / relativeSpeed) * 60) : 0;
+
+        state.currentCountdownSeconds = Math.max(0, minutesLeft * 60);
+        updateTimerDisplay(state.currentCountdownSeconds);
+        startCountdownTimer();
+
+        state.top10CurrentCounts.set(battle.higher.id, battle.higher.count);
+        state.top10CurrentCounts.set(battle.lower.id, battle.lower.count);
+        state.top10CurrentCounts.set('battle-gap', gap);
+
+        formatAndAnimateCount(card.querySelector(`[data-channel-id="${battle.higher.id}"]`), battle.higher.count, battle.higher.id, card);
+        formatAndAnimateCount(card.querySelector(`[data-channel-id="${battle.lower.id}"]`), battle.lower.count, battle.lower.id, card);
+        formatAndAnimateCount(card.querySelector('[data-channel-id="battle-gap"]'), gap, 'battle-gap', card);
+    }
+
+    // ==================================================================
+    // BATTLE DETECTION
+    // ==================================================================
+    function detectBattle(channels) {
+        if (!Array.isArray(channels) || channels.length < 2) return null;
+
+        const sorted = [...channels].sort((a, b) => safeParseInt(b.count) - safeParseInt(a.count));
+
+        for (let i = 0; i < sorted.length - 1; i++) {
+            const higher = sorted[i];
+            const lower = sorted[i + 1];
+
+            const gap = safeParseInt(higher.count) - safeParseInt(lower.count);
+            if (gap <= 0) continue;
+
+            const relativeSpeed = safeParseInt(lower.gain) - safeParseInt(higher.gain);
+            if (relativeSpeed <= 0) continue;
+
+            const minutesToOvertake = (gap / relativeSpeed) * 60;
+
+            if (minutesToOvertake <= CONFIG.BATTLE_THRESHOLD_MINUTES && minutesToOvertake > 0) {
+                return {
+                    higher,
+                    lower,
+                    gap,
+                    minutesToOvertake
+                };
+            }
+        }
+
+        return null;
+    }
+
+    // ==================================================================
+    // MAIN LOGIC
+    // ==================================================================
+    function fullRefresh() {
+        const now = Date.now();
+        const channels = [];
+
+        document.querySelectorAll('.card').forEach(card => {
+            if (!card?.id) return;
+
+            const count = safeParseInt(card.getAttribute('data-count'));
+            const prev = state.previousGainCounts.get(card.id) || { count, timestamp: now, gain: 0 };
+
+            const hrs = Math.max(0.001, (now - prev.timestamp) / (3600 * 1000));
+            const diff = count - prev.count;
+            const gain = diff / hrs;
+
+            state.previousGainCounts.set(card.id, { count, timestamp: now, gain });
+
+            const rank = card.querySelector('.num_text')?.textContent?.trim() || '?';
+            const name = card.querySelector('.card_name, .name, h3, h2')?.textContent?.trim().toUpperCase() || 'UNKNOWN';
+
+            channels.push({ id: card.id, count, gain, rank, name });
+        });
+
+        state.allChannels = channels;
+
+        const battle = detectBattle(channels);
+
+        if (battle) {
+            const needReRender = !state.battleMode || state.battlePair?.higher?.id !== battle.higher.id;
+
+            state.battleMode = true;
+            state.battlePair = battle;
+
+            if (needReRender) {
+                if (state.transitionTimeout) clearTimeout(state.transitionTimeout);
+                renderBattle(battle);
+            }
+        }
+        else if (state.battleMode) {
+            state.battleMode = false;
+            state.battlePair = null;
+            if (state.timerInterval) {
+                clearInterval(state.timerInterval);
+                state.timerInterval = null;
+            }
+
+            const gainers = [...channels].sort((a, b) => b.gain - a.gain);
+            state.currentTop10 = gainers.slice(0, CONFIG.TOP_GAINERS_LIMIT);
+            state.currentGroup = 'A';
+            renderGroup(state.currentTop10, 0, 5);
+        }
+        else {
+            const gainers = [...channels].sort((a, b) => b.gain - a.gain);
+            const top10 = gainers.slice(0, CONFIG.TOP_GAINERS_LIMIT);
+            state.currentTop10 = top10;
+
+            if (state.transitionTimeout) clearTimeout(state.transitionTimeout);
+
+            state.currentGroup = 'A';
+            renderGroup(top10, 0, 5);
+
+            state.transitionTimeout = setTimeout(() => {
+                if (state.battleMode) return;
+                state.currentGroup = 'B';
+                renderGroup(top10, 5, 10);
+
+                state.transitionTimeout = setTimeout(() => {
+                    if (state.battleMode) return;
+                    state.currentGroup = 'A';
+                    renderGroup(top10, 0, 5);
+                }, CONFIG.DISPLAY_GROUP_B_MS);
+            }, CONFIG.DISPLAY_GROUP_A_MS);
+        }
+    }
+
+    function updateOdometersOnly() {
+        document.querySelectorAll('.card').forEach(card => {
+            if (!card.id) return;
+
+            const count = safeParseInt(card.getAttribute('data-count'));
+            const odom = document.querySelector(`.top5-count-display[data-channel-id='${card.id}']`);
+            const cardEl = odom?.closest('.top10-card, .battle-card');
+
+            if (odom && cardEl) {
+                formatAndAnimateCount(odom, count, card.id, cardEl);
+            }
+        });
+
+        if (state.battleMode && state.battlePair) {
+            const h = document.getElementById(state.battlePair.higher.id);
+            const l = document.getElementById(state.battlePair.lower.id);
+
+            if (h && l) {
+                const hCount = safeParseInt(h.getAttribute('data-count'));
+                const lCount = safeParseInt(l.getAttribute('data-count'));
+                const gap = Math.max(0, hCount - lCount);
+
+                const gapOdom = document.querySelector('.top5-count-display[data-channel-id="battle-gap"]');
+                if (gapOdom) {
+                    formatAndAnimateCount(gapOdom, gap, 'battle-gap', gapOdom.closest('.battle-card'));
+                }
+            }
+        }
+    }
+
+    // ==================================================================
+    // INIT & CLEANUP
+    // ==================================================================
+    function init() {
+        document.querySelectorAll('.card').forEach(card => {
+            if (card.id) {
+                const count = safeParseInt(card.getAttribute('data-count'));
+                state.previousGainCounts.set(card.id, {
+                    count,
+                    timestamp: Date.now(),
+                    gain: 0
+                });
+            }
+        });
+
+        fullRefresh();
+
+        state.intervals.push(setInterval(updateOdometersOnly, CONFIG.UPDATE_INTERVAL_FAST_MS));
+        state.intervals.push(setInterval(fullRefresh, CONFIG.UPDATE_INTERVAL_SLOW_MS));
+    }
+
+    function cleanup() {
+        state.intervals.forEach(clearInterval);
+        state.intervals = [];
+
+        if (state.transitionTimeout) clearTimeout(state.transitionTimeout);
+        if (state.timerInterval) clearInterval(state.timerInterval);
+
+        document.getElementById('top10-container')?.remove();
+    }
+
+    // Start
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => setTimeout(init, 1000));
+    } else {
+        setTimeout(init, 1000);
+    }
+
+    window.addEventListener('unload', cleanup);
+})();
