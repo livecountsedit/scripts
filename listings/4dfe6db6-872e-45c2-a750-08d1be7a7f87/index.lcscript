@@ -1,90 +1,42 @@
 (() => {
   if (window.__surpassInterval) clearInterval(window.__surpassInterval);
-  if (window.__customThemeGUI) window.__customThemeGUI.remove();
 
-  if (window.__oldScriptsCleaned !== true) {
-    window.lastMilestoneValues = new WeakMap();
-    window.triggeredMilestones = new WeakMap();
-    window.previousValues = {};
-    window.previousRank = {};
-    window.isActive = false;
-    window.__oldScriptsCleaned = true;
+  if (window.__surpassResizeHandler) {
+    window.removeEventListener("resize", window.__surpassResizeHandler);
+    window.__surpassResizeHandler = null;
   }
+
+  if (window.__surpassScrollHandler) {
+    window.removeEventListener("scroll", window.__surpassScrollHandler);
+    window.__surpassScrollHandler = null;
+  }
+
+  document.querySelectorAll("#roboto-card-monitor-style").forEach((element) => element.remove());
+  document.querySelectorAll(".update-message").forEach((element) => element.remove());
+  document.querySelectorAll(".surpass-dark-overlay").forEach((element) => element.remove());
 
   const CHECK_INTERVAL = 1000;
   const SURPASS_DELAY = 10;
-  const TOTAL_REVEAL_DURATION = 7500;
+  const REVEAL_DELAY = 150;
   const GAP_THRESHOLD = 1;
   const CARD_SELECTOR = ".card";
 
-  const ANIMATION_DURATION = 7000;
-  const FADE_DURATION = 500;
-  const BACKGROUND_GIF = "https://i.ibb.co/h1JYTktj/rocket-ezgif-com-video-to-gif-converter.gif";
-
-  const MILESTONES = [];
-  for (let m = 100_000; m < 100_000_000; m += 100_000) {
-    MILESTONES.push({ min: m, max: m + 5000, text: m.toLocaleString() });
-  }
-  for (let m = 100_000_000; m < 1_000_000_000; m += 1_000_000) {
-    MILESTONES.push({ min: m, max: m + 5000, text: m.toLocaleString() });
-  }
-  for (let m = 1_000_000_000; m <= 20_000_000_000; m += 10_000_000) {
-    MILESTONES.push({ min: m, max: m + 5000, text: m.toLocaleString() });
-  }
-
-  let currentMode = "roboto";
   let isActive = false;
   let surpassTimeout = null;
   let currentSurpassEvent = null;
   let previousValues = {};
   let previousRank = {};
   let updateMessage = null;
-
-  const lastMilestoneValues = new WeakMap();
-  const triggeredMilestones = new WeakMap();
+  let overlay = null;
+  let lastTop50Id = null;
 
   const style = document.createElement("style");
-  style.id = "custom-card-style";
+  style.id = "roboto-card-monitor-style";
+
   style.textContent = `
-    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@600;700&display=swap');
-
-    @font-face {
-      font-family: 'MDM';
-      src: url('https://raw.githubusercontent.com/DapohcaReal/customfonthost/main/mdm-regular-webfont.woff2') format('woff2');
-      font-weight: 400;
-      font-style: normal;
-    }
-
     ${CARD_SELECTOR} {
       position: relative !important;
-      z-index: 10000;
-      transition: background-color 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease;
-    }
-
-    ${CARD_SELECTOR} > *:not(.num):not(.celebration-overlay) {
-      transition: opacity 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
-                  transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
-      will-change: opacity, transform;
-    }
-
-    ${CARD_SELECTOR}.content-hidden {
-      background-color: transparent !important;
-      background-image: none !important;
-      border-color: transparent !important;
-      box-shadow: none !important;
-    }
-
-    ${CARD_SELECTOR}.content-hidden > *:not(.num):not(.celebration-overlay) {
-      opacity: 0 !important;
-      transform: scale(0.9) translateY(12px) !important;
-      pointer-events: none;
-    }
-
-    ${CARD_SELECTOR} .num {
-      position: relative !important;
-      z-index: 40 !important;
-      opacity: 1 !important;
-      visibility: visible !important;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
     }
 
     .update-message {
@@ -93,240 +45,142 @@
       left: 50%;
       transform: translate(-50%, -50%);
       background: transparent !important;
-      box-shadow: none !important;
       border: none !important;
-      backdrop-filter: none !important;
-      -webkit-backdrop-filter: none !important;
+      box-shadow: none !important;
       color: #ffffff;
       padding: 0;
-      z-index: 100;
+      z-index: 1000;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      animation: overlay-fade-in 0.25s ease-out forwards;
-      pointer-events: none;
-    }
-
-    body.mode-roboto .update-message,
-    body.mode-roboto .loading-title,
-    body.mode-roboto .loading-text {
       font-family: 'Roboto', sans-serif !important;
-    }
-    body.mode-roboto .loading-title { font-weight: 600 !important; }
-    body.mode-roboto .loading-text { font-weight: 600 !important; }
-
-    body.mode-mdm .update-message,
-    body.mode-mdm .loading-title,
-    body.mode-mdm .loading-text {
-      font-family: 'MDM', sans-serif !important;
-    }
-    body.mode-mdm .loading-title { font-weight: 700 !important; }
-    body.mode-mdm .loading-text { font-weight: 600 !important; }
-
-    @keyframes overlay-fade-in {
-      from { opacity: 0; transform: translate(-50%, -48%) scale(0.95); }
-      to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      font-weight: 600 !important;
+      pointer-events: none;
+      user-select: none;
+      animation: update-message-fade-in 0.2s ease-out forwards;
     }
 
-    .update-message.fade-out {
-      opacity: 0;
-      transform: translate(-50%, -52%) scale(0.95);
-      transition: opacity 0.25s ease-in, transform 0.25s ease-in;
+    @keyframes update-message-fade-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
     }
 
     .vertical-line-loader {
       display: flex;
-      gap: 10px;
-      margin-bottom: 22px;
-      height: 54px;
+      justify-content: center;
       align-items: center;
+      gap: 8px;
+      height: 45px;
+      margin-bottom: 22px;
+      pointer-events: none;
+      user-select: none;
     }
-    .loader-line {
-      width: 7px;
-      height: 48px;
-      background: #ffffff;
-      border-radius: 3.5px;
-      animation: line-bounce 0.9s ease-in-out infinite;
-      box-shadow: 0 0 12px rgba(0, 0, 0, 0.75);
-    }
-    .loader-line:nth-child(2) { animation-delay: 0.15s; }
-    .loader-line:nth-child(3) { animation-delay: 0.3s; }
 
-    @keyframes line-bounce {
-      0%, 100% { transform: scaleY(0.35); opacity: 0.4; }
-      50% { transform: scaleY(1.05); opacity: 1; }
+    .vertical-line-loader span {
+      display: block;
+      width: 6px;
+      height: 35px;
+      background: #ffffff;
+      border-radius: 3px;
+      animation: vertical-loader-bounce 1s infinite ease-in-out;
+    }
+
+    .vertical-line-loader span:nth-child(1) {
+      animation-delay: 0s;
+    }
+
+    .vertical-line-loader span:nth-child(2) {
+      animation-delay: 0.15s;
+    }
+
+    .vertical-line-loader span:nth-child(3) {
+      animation-delay: 0.3s;
+    }
+
+    @keyframes vertical-loader-bounce {
+      0%, 100% {
+        transform: scaleY(0.45);
+        opacity: 0.55;
+      }
+
+      50% {
+        transform: scaleY(1);
+        opacity: 1;
+      }
     }
 
     .loading-title {
       font-size: 3.6rem;
+      font-weight: 600 !important;
       letter-spacing: 0.5px;
       margin-bottom: 10px;
       color: #ffffff;
+      font-family: 'Roboto', sans-serif !important;
       text-shadow: 0 3px 14px rgba(0, 0, 0, 0.95);
     }
 
     .loading-text {
+      font-weight: 600 !important;
       text-align: center;
       font-size: 1.9rem;
       color: #ffffff;
-      text-shadow: 0 2px 11px rgba(0, 0, 0, 0.95);
-    }
-
-    .celebration-overlay {
-      position: absolute; top:0; left:0; width:100%; height:100%;
-      display:flex; align-items:center; justify-content:center;
-      z-index: 30 !important; overflow:hidden; border-radius: inherit;
-    }
-    .celebration-content {
-      display:flex; flex-direction:column;
-      align-items:center; justify-content:center;
-      position:relative; z-index:31;
-      width:100%; height:100%;
-    }
-    .celebration-bg {
-      position:absolute; width:100%; height:100%;
-      object-fit:cover; opacity:0.75; top:0; left:0;
-    }
-    .celebration-text {
-      font-size:36px;
       font-family: 'Roboto', sans-serif !important;
-      font-weight: 700 !important;
-      color:white;
-      text-shadow:0 0 10px rgba(0,0,0,0.7);
-      animation: colorChange 2s infinite;
-      text-align:center;
-      display:flex; align-items:center; justify-content:center;
-      height:100%; width:100%;
-    }
-    @keyframes colorChange {
-      0% { color:#ffc4d8; }
-      20% { color:#d4c0fa; }
-      40% { color:#bcdbf5; }
-      60% { color:#f7f7be; }
-      80% { color:#bcf5bc; }
-      100% { color:#f5bccf; }
+      text-shadow: 0 2px 11px rgba(0, 0, 0, 0.95);
+      margin-bottom: 0;
     }
 
-    #custom-theme-gui {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      z-index: 999999;
-      background: rgba(20, 20, 20, 0.9);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 8px;
-      padding: 12px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-      color: #fff;
-      font-family: sans-serif;
-      user-select: none;
-      min-width: 180px;
+    ${CARD_SELECTOR}.card-hidden {
+      background: transparent !important;
+      background-color: transparent !important;
+      border-color: transparent !important;
+      box-shadow: none !important;
+      outline: none !important;
+      transform: none !important;
+      will-change: auto !important;
+      z-index: 5000 !important;
     }
-    #custom-theme-gui-header {
-      font-weight: bold;
-      font-size: 14px;
-      margin-bottom: 8px;
-      cursor: move;
-      padding-bottom: 4px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+
+    ${CARD_SELECTOR}.card-hidden > * {
+      visibility: hidden !important;
+      opacity: 0 !important;
     }
-    .theme-gui-btn {
-      width: 100%;
-      padding: 6px;
-      margin-top: 6px;
-      border: none;
-      border-radius: 4px;
-      background: #333;
-      color: #fff;
-      cursor: pointer;
-      font-size: 12px;
-      transition: background 0.2s;
+
+    ${CARD_SELECTOR}.card-hidden .num {
+      visibility: visible !important;
+      opacity: 1 !important;
+      position: relative !important;
+      z-index: 5001 !important;
     }
-    .theme-gui-btn:hover {
-      background: #444;
+
+    ${CARD_SELECTOR}.card-hidden .num_text {
+      visibility: visible !important;
+      opacity: 1 !important;
+      position: relative !important;
+      z-index: 5002 !important;
     }
-    .theme-gui-btn.active {
-      background: #007acc;
-      font-weight: bold;
+
+    ${CARD_SELECTOR}.card-updating {
+      position: relative;
+      z-index: 5000 !important;
+    }
+
+    ${CARD_SELECTOR}.pending-surpass {
+      border-left: 4px solid gold;
     }
   `;
+
   document.head.appendChild(style);
-  document.body.classList.add("mode-roboto");
-
-  const existingFooter = document.querySelector(".gianluca-footer");
-  if (existingFooter) existingFooter.remove();
-
-  function createGUI() {
-    const gui = document.createElement("div");
-    gui.id = "custom-theme-gui";
-    window.__customThemeGUI = gui;
-
-    const header = document.createElement("div");
-    header.id = "custom-theme-gui-header";
-    header.innerHTML = "Font Style Selector";
-    gui.appendChild(header);
-
-    const btnRoboto = document.createElement("button");
-    btnRoboto.className = "theme-gui-btn active";
-    btnRoboto.textContent = "Roboto Version";
-
-    const btnMDM = document.createElement("button");
-    btnMDM.className = "theme-gui-btn";
-    btnMDM.textContent = "MDM Version";
-
-    btnRoboto.onclick = () => {
-      currentMode = "roboto";
-      document.body.classList.remove("mode-mdm");
-      document.body.classList.add("mode-roboto");
-      btnRoboto.classList.add("active");
-      btnMDM.classList.remove("active");
-    };
-
-    btnMDM.onclick = () => {
-      currentMode = "mdm";
-      document.body.classList.remove("mode-roboto");
-      document.body.classList.add("mode-mdm");
-      btnMDM.classList.add("active");
-      btnRoboto.classList.remove("active");
-    };
-
-    gui.appendChild(btnRoboto);
-    gui.appendChild(btnMDM);
-    document.body.appendChild(gui);
-
-    let isDragging = false;
-    let offsetX, offsetY;
-
-    header.onmousedown = (e) => {
-      isDragging = true;
-      offsetX = e.clientX - gui.offsetLeft;
-      offsetY = e.clientY - gui.offsetTop;
-    };
-
-    document.onmousemove = (e) => {
-      if (!isDragging) return;
-      gui.style.left = (e.clientX - offsetX) + "px";
-      gui.style.top = (e.clientY - offsetY) + "px";
-      gui.style.right = "auto";
-    };
-
-    document.onmouseup = () => {
-      isDragging = false;
-    };
-  }
-
-  createGUI();
 
   function getCardValue(card) {
     const numText = card.querySelector(".num_text");
-    return numText ? parseInt(numText.textContent.replace(/,/g, "")) || 0 : 0;
+
+    return numText
+      ? parseInt(numText.textContent.replace(/,/g, ""), 10) || 0
+      : 0;
   }
 
-  function checkForSurpassing() {
+  function checkForSurpassingOrTop50() {
     if (isActive) return false;
 
     const cards = Array.from(document.querySelectorAll(CARD_SELECTOR));
@@ -336,12 +190,23 @@
     cards.forEach((card) => {
       const id = card.id;
       currentValues[id] = getCardValue(card);
-      if (previousValues[id] !== currentValues[id]) hasChange = true;
+
+      if (previousValues[id] !== currentValues[id]) {
+        hasChange = true;
+      }
     });
 
     if (Object.keys(previousValues).length === 0) {
       previousValues = currentValues;
-      cards.forEach((card, index) => (previousRank[card.id] = index));
+
+      cards.forEach((card, index) => {
+        previousRank[card.id] = index;
+      });
+
+      if (cards.length >= 50) {
+        lastTop50Id = cards[49]?.id || null;
+      }
+
       return false;
     }
 
@@ -351,7 +216,7 @@
       .map((card) => ({
         id: card.id,
         value: currentValues[card.id],
-        element: card,
+        element: card
       }))
       .sort((a, b) => b.value - a.value);
 
@@ -359,35 +224,73 @@
 
     currentRanking.forEach((card, newIndex) => {
       const oldIndex = previousRank[card.id];
-      if (oldIndex > newIndex) {
+
+      if (oldIndex !== undefined && oldIndex > newIndex) {
         const below = currentRanking[newIndex + 1];
-        if (below && card.value - below.value >= GAP_THRESHOLD) {
-          surpassEvent = { cards, timestamp: Date.now() };
+
+        if (
+          below &&
+          card.value - below.value >= GAP_THRESHOLD
+        ) {
+          surpassEvent = {
+            cards,
+            timestamp: Date.now()
+          };
         }
       }
     });
 
-    previousValues = currentValues;
-    currentRanking.forEach((card, index) => (previousRank[card.id] = index));
+    let top50Changed = false;
 
-    return surpassEvent;
+    if (cards.length >= 50) {
+      const top50Card = currentRanking[49];
+
+      if (
+        top50Card &&
+        top50Card.id !== lastTop50Id
+      ) {
+        top50Changed = true;
+        lastTop50Id = top50Card.id;
+      }
+    }
+
+    previousValues = currentValues;
+
+    currentRanking.forEach((card, index) => {
+      previousRank[card.id] = index;
+    });
+
+    if (surpassEvent) {
+      return surpassEvent;
+    }
+
+    if (top50Changed) {
+      return {
+        cards,
+        timestamp: Date.now(),
+        top50: true
+      };
+    }
+
+    return false;
   }
 
-  function executeUpdate(cards) {
-    isActive = true;
-
-    if (updateMessage) updateMessage.remove();
+  function createUpdateMessage() {
+    if (updateMessage && updateMessage.parentElement) {
+      updateMessage.remove();
+    }
 
     updateMessage = document.createElement("div");
     updateMessage.className = "update-message";
 
     const loader = document.createElement("div");
     loader.className = "vertical-line-loader";
-    for (let i = 0; i < 3; i++) {
-      const line = document.createElement("div");
-      line.className = "loader-line";
-      loader.appendChild(line);
-    }
+
+    loader.innerHTML = `
+      <span></span>
+      <span></span>
+      <span></span>
+    `;
 
     const title = document.createElement("div");
     title.className = "loading-title";
@@ -400,124 +303,110 @@
     updateMessage.appendChild(loader);
     updateMessage.appendChild(title);
     updateMessage.appendChild(text);
+
     document.body.appendChild(updateMessage);
+  }
 
-    cards.forEach((card) => card.classList.add("content-hidden"));
+  function removeUpdateMessage() {
+    if (updateMessage && updateMessage.parentElement) {
+      updateMessage.remove();
+    }
 
-    const cardCount = cards.length;
-    const revealDelay = cardCount > 1 ? TOTAL_REVEAL_DURATION / (cardCount - 1) : 0;
+    updateMessage = null;
+  }
+
+  function createOverlay() {
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.className = "surpass-dark-overlay";
+      document.body.appendChild(overlay);
+    }
+
+    overlay.style.display = "none";
+  }
+
+  function removeOverlay() {
+    if (!overlay) return;
+    overlay.style.display = "none";
+  }
+
+  function executeUpdate(cards) {
+    isActive = true;
+
+    createUpdateMessage();
+
+    cards.forEach((card) => {
+      card.classList.add("card-hidden");
+    });
+
+    if (surpassTimeout) {
+      clearTimeout(surpassTimeout);
+      surpassTimeout = null;
+    }
 
     setTimeout(() => {
       cards.forEach((card, index) => {
         setTimeout(() => {
-          card.classList.remove("content-hidden");
+          card.classList.remove("card-hidden");
+          card.classList.add("card-updating");
 
-          if (index === cardCount - 1) {
-            setTimeout(() => {
-              if (updateMessage) {
-                updateMessage.classList.add("fade-out");
-                setTimeout(() => {
-                  updateMessage.remove();
-                  updateMessage = null;
-                  isActive = false;
-                }, 250);
-              } else {
+          setTimeout(() => {
+            card.classList.remove("card-updating");
+
+            if (index === cards.length - 1) {
+              setTimeout(() => {
+                removeUpdateMessage();
                 isActive = false;
-              }
-            }, 200);
-          }
-        }, index * revealDelay);
+              }, 300);
+            }
+          }, 300);
+        }, index * REVEAL_DELAY);
       });
     }, 300);
   }
 
-  function celebrate(card, milestone) {
-    if (card.dataset["celebrationLock"] === "true") return;
-    card.dataset["celebrationLock"] = "true";
+  function startMonitoring() {
+    let lastSurpassTimestamp = 0;
 
-    const overlay = document.createElement("div");
-    overlay.className = "celebration-overlay";
-    overlay.style.opacity = "0";
+    window.__surpassInterval = setInterval(() => {
+      if (isActive) return;
 
-    const content = document.createElement("div");
-    content.className = "celebration-content";
+      const newSurpassEvent = checkForSurpassingOrTop50();
 
-    const bgGif = document.createElement("img");
-    bgGif.className = "celebration-bg";
-    bgGif.src = BACKGROUND_GIF + "?t=" + Date.now();
+      if (
+        newSurpassEvent &&
+        (
+          !lastSurpassTimestamp ||
+          Date.now() - lastSurpassTimestamp > 1000
+        )
+      ) {
+        lastSurpassTimestamp = Date.now();
 
-    const textEl = document.createElement("div");
-    textEl.className = "celebration-text";
-    textEl.textContent = milestone.text;
-
-    overlay.appendChild(bgGif);
-    content.appendChild(textEl);
-    overlay.appendChild(content);
-
-    if (getComputedStyle(card).position === "static") {
-      card.style.position = "relative";
-    }
-    card.appendChild(overlay);
-
-    setTimeout(() => {
-      overlay.style.transition = `opacity ${FADE_DURATION}ms ease-in`;
-      overlay.style.opacity = "1";
-    }, 10);
-
-    setTimeout(() => {
-      overlay.style.transition = `opacity ${FADE_DURATION}ms ease-out`;
-      overlay.style.opacity = "0";
-      setTimeout(() => {
-        overlay.remove();
-        card.dataset["celebrationLock"] = "false";
-      }, FADE_DURATION);
-    }, ANIMATION_DURATION - FADE_DURATION);
-  }
-
-  function checkMilestones() {
-    document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
-      const raw = card.dataset.count;
-      if (!raw) return;
-
-      const value = parseInt(raw, 10);
-      const prev = lastMilestoneValues.get(card) ?? value;
-      lastMilestoneValues.set(card, value);
-
-      let triggered = triggeredMilestones.get(card);
-      if (!triggered) {
-        triggered = new Set();
-        triggeredMilestones.set(card, triggered);
-      }
-
-      for (let m of MILESTONES) {
-        if (triggered.has(m.min)) continue;
-
-        const crossedIntoWindow =
-          prev < m.min && value >= m.min && value <= m.max;
-
-        if (crossedIntoWindow) {
-          triggered.add(m.min);
-          celebrate(card, m);
-          break;
+        if (surpassTimeout) {
+          clearTimeout(surpassTimeout);
+          surpassTimeout = null;
         }
-      }
-    });
-  }
 
-  window.__surpassInterval = setInterval(() => {
-    if (!isActive) {
-      const surpass = checkForSurpassing();
-      if (surpass) {
-        if (surpassTimeout) clearTimeout(surpassTimeout);
-        currentSurpassEvent = surpass;
+        currentSurpassEvent = newSurpassEvent;
+
+        currentSurpassEvent.cards.forEach((card) => {
+          card.classList.add("pending-surpass");
+        });
 
         surpassTimeout = setTimeout(() => {
-          executeUpdate(currentSurpassEvent.cards);
-          currentSurpassEvent = null;
+          if (currentSurpassEvent) {
+            currentSurpassEvent.cards.forEach((card) => {
+              card.classList.remove("pending-surpass");
+            });
+
+            executeUpdate(currentSurpassEvent.cards);
+            currentSurpassEvent = null;
+          }
         }, SURPASS_DELAY);
       }
-    }
+    }, CHECK_INTERVAL);
+  }
 
-    checkMilestones();
-  }, CHECK_INTERVAL);
+  console.log("[Roboto Card Monitor] Started.");
+  startMonitoring();
 })();
