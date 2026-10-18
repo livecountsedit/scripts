@@ -1,0 +1,281 @@
+/*SETTINGS:
+CHECK_INTERVAL: INT
+SURPASS_DELAY: INT
+REVEAL_DELAY: INT
+BLINK_COUNT: INT
+GAP_THRESHOLD: INT
+*/
+
+(function() {
+// CONFIGURATION
+const CHECK_INTERVAL = 1000; // Check every second
+const SURPASS_DELAY = 10; // 0.01 seconds delay after surpassing
+const REVEAL_DELAY = 150; // Reduced from 300ms to 150ms for faster reveal
+const BLINK_COUNT = 1; // Each card blinks 1 time
+const GAP_THRESHOLD = 1; // Minimum difference to consider a surpass
+
+// STATE
+let isActive = false;
+let surpassTimeout = null;
+let currentSurpassEvent = null;
+let previousValues = {};
+let previousRank = {};
+let updateMessage = null;
+
+// STYLES
+const style = document.createElement('style');
+style.textContent = `
+@keyframes card-blink {
+0%, 100% { 
+transform: scale(1.05);
+box-shadow: transparent;
+background: white;
+}
+50% { 
+transform: scale(1);
+box-shadow: none;
+background: white;
+opacity: 0.35;
+}
+}
+.card-updating {
+animation: card-blink 0.3s ${BLINK_COUNT}; // Reduced from 0.5s to 0.3s
+position: relative;
+z-index: 10;
+}
+.update-message {
+position: fixed;
+top: 40%;
+left: 50%;
+transform: translate(-50%, -50%);
+background: transparent;
+color: white;
+padding: 20px;
+border-radius: 8px;
+font-size: 22px;
+z-index: 1000;
+display: flex;
+flex-direction: column;
+align-items: center;
+justify-content: center;
+text-align: center;
+font-weight: 900;
+text-shadow: 0 0 5px rgba(0,0,0,0.5);
+}
+.card-hidden {
+visibility: hidden;
+opacity: 0;
+transform: translateY(20px);
+transition: all 0.2s ease-out; // Reduced from 0.3s
+}
+.pending-surpass {
+border-left: 4px solid gold;
+}
+.vertical-line-loader {
+display: flex;
+gap: 10px;
+margin-bottom: 15px;
+}
+.loader-line {
+width: 5px;
+height: 25px;
+background: white;
+animation: line-bounce 1.2s ease-in-out infinite;
+}
+.loader-line:nth-child(1) {
+animation-delay: 0s;
+}
+.loader-line:nth-child(2) {
+animation-delay: 0.2s;
+}
+.loader-line:nth-child(3) {
+animation-delay: 0.4s;
+}
+@keyframes line-bounce {
+0%, 100% {
+transform: translateY(0);
+}
+50% {
+transform: translateY(-10px);
+}
+}
+.loading-text {
+font-weight: 900;
+text-align: center;
+width: 100%;
+font-size: 1.2em;
+letter-spacing: 1px;
+}
+`;
+document.head.appendChild(style);
+
+// GET CURRENT NUMERIC VALUE
+function getCardValue(card) {
+const numText = card.querySelector('.num_text');
+if (!numText) return 0;
+return parseInt(numText.textContent) || 0;
+}
+
+// CHECK FOR SURPASSING
+function checkForSurpassing() {
+if (isActive) return false;
+
+const cards = Array.from(document.querySelectorAll('.card'));
+const currentValues = {};
+let hasChange = false;
+
+// Get current values and check for changes
+cards.forEach(card => {
+const id = card.id;
+currentValues[id] = getCardValue(card);
+
+if (previousValues[id] !== currentValues[id]) {
+hasChange = true;
+}
+});
+
+// First run - initialize tracking
+if (Object.keys(previousValues).length === 0) {
+previousValues = currentValues;
+cards.forEach((card, index) => {
+previousRank[card.id] = index;
+});
+return false;
+}
+
+// Only proceed if values changed
+if (!hasChange) return false;
+
+// Get current ranking
+const currentRanking = cards
+.map(card => ({
+id: card.id,
+value: currentValues[card.id],
+element: card
+}))
+.sort((a, b) => b.value - a.value);
+
+// Check for position changes
+let surpassEvent = null;
+currentRanking.forEach((card, newIndex) => {
+const oldIndex = previousRank[card.id];
+if (oldIndex > newIndex && 
+(currentValues[card.id] - currentValues[currentRanking[newIndex + 1]?.id] >= GAP_THRESHOLD)) {
+surpassEvent = {
+cards: cards,
+timestamp: Date.now()
+};
+}
+});
+
+// Update previous state
+previousValues = currentValues;
+currentRanking.forEach((card, index) => {
+previousRank[card.id] = index;
+});
+
+return surpassEvent;
+}
+
+// ANIMATION SEQUENCE
+function executeUpdate(cards) {
+isActive = true;
+
+// Show update message with new loader style
+if (updateMessage) {
+updateMessage.remove();
+}
+updateMessage = document.createElement('div');
+updateMessage.className = 'update-message';
+
+// Create vertical line loader (l l l)
+const loader = document.createElement('div');
+loader.className = 'vertical-line-loader';
+
+for (let i = 0; i < 3; i++) {
+const line = document.createElement('div');
+line.className = 'loader-line';
+loader.appendChild(line);
+}
+
+// Create static text (no animation)
+const text = document.createElement('div');
+text.className = 'loading-text';
+text.textContent = 'Please Wait We Are Checking For Information';
+
+updateMessage.appendChild(loader);
+updateMessage.appendChild(text);
+document.body.appendChild(updateMessage);
+
+// Hide all cards
+cards.forEach(card => {
+card.classList.add('card-hidden');
+});
+
+// Animation sequence
+setTimeout(() => {
+// Reveal cards one by one in their original order
+cards.forEach((card, index) => {
+setTimeout(() => {
+card.classList.remove('card-hidden');
+card.classList.add('card-updating');
+
+// Remove animation class after it completes
+setTimeout(() => {
+card.classList.remove('card-updating');
+
+// Remove message and reset state after last card
+if (index === cards.length - 1) {
+setTimeout(() => { 
+if (updateMessage) {
+updateMessage.remove();
+updateMessage = null;
+}
+isActive = false; 
+}, 300); // Reduced from 500ms
+}
+}, BLINK_COUNT * 300); // Reduced from 500ms
+}, index * REVEAL_DELAY);
+});
+}, 300); // Reduced from 500ms
+}
+
+// MONITORING SYSTEM
+function startMonitoring() {
+setInterval(() => {
+if (isActive) return;
+
+const newSurpassEvent = checkForSurpassing();
+
+if (newSurpassEvent) {
+// Clear any pending timeout
+if (surpassTimeout) {
+clearTimeout(surpassTimeout);
+}
+
+// Store the new event
+currentSurpassEvent = newSurpassEvent;
+
+// Mark cards as pending
+currentSurpassEvent.cards.forEach(card => {
+card.classList.add('pending-surpass');
+});
+
+// Set timeout for the actual animation
+surpassTimeout = setTimeout(() => {
+if (currentSurpassEvent) {
+currentSurpassEvent.cards.forEach(card => {
+card.classList.remove('pending-surpass');
+});
+executeUpdate(currentSurpassEvent.cards);
+currentSurpassEvent = null;
+}
+}, SURPASS_DELAY);
+}
+}, CHECK_INTERVAL);
+}
+
+// INITIALIZE
+console.log('Delayed Surpass Monitor Activated - With Faster White Blink Background');
+startMonitoring();
+})();

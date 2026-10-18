@@ -1,0 +1,12 @@
+{
+    "created": "2026-10-10",
+    "published": "2026-10-14",
+    "updated": "2026-10-14",
+    "title": "Fire Rank Lock",
+    "description": "locks fire icons to their rank until the next fire update interval. If a channel with a fire overtakes another, the fire stays on that rank instead of moving with the channel.",
+    "author": "Billy",
+    "url": "https://discord.com/channels/880284344000843806/1558610282341994506/1558611956569608243",
+    "tags": ["fun", "mdm"],
+    "ai": false,
+    "id": "786269e3-aa01-45b1-bcfc-b2ebf0e38f4d"
+}
