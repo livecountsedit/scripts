@@ -1,12 +1,14 @@
 {
     "created": "2026-08-20",
     "published": "2026-08-20",
-    "updated": "2026-08-20",
+    "updated": "2026-10-26",
     "title": "Set Subs GUI",
     "description": "Draggable Set Subs GUI that lets you quickly change counts without scrolling the page every few minutes to set it constantly.",
-    "author": "Black Domina",
+    "author": "Anonymous",
     "url": "https://discord.com/channels/880284344000843806/1540100810804039781/1540102254244266105",
-    "tags": ["util"],
+    "tags": [
+        "util"
+    ],
     "ai": false,
     "id": "41dba258-0ce5-4fc7-88a9-013556d4cea0"
 }
